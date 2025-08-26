@@ -1,21 +1,21 @@
-# Hugging Face Chatbot (DialoGPT Fallback)
-# A simple chat interface to interact with Hugging Face language models.
+# Hugging Face Chatbot (GPT-2 Fallback)
+# A simple text generation interface using the Hugging Face Inference API.
 # 
 # Instructions:
 # 1. Get your Hugging Face API token from https://huggingface.co/settings/tokens
 # 2. Enter your token in the sidebar.
-# 3. Type your message and press Enter or click 'Send'.
+# 3. Type your prompt and press Enter or click 'Send'.
 #
 # Notes:
-# - This demo uses the microsoft/DialoGPT-medium model via the general inference endpoint.
+# - This demo uses the 'gpt2' model via the general inference endpoint.
+# - Responses are generated based on the prompt history.
 # - Conversations are stored in session state and are lost when the app reloads.
-# - For best results, be clear and specific in your prompts.
 
 import streamlit as st
 import requests
 
 # App title and sidebar setup
-st.title("🤖 Hugging Face Chatbot (DialoGPT)")
+st.title("🤖 Hugging Face Text Gen (GPT-2)")
 
 # Initialize session state for messages and API token
 if "messages" not in st.session_state:
@@ -29,7 +29,7 @@ with st.sidebar:
     st.markdown(
         "1. Get your Hugging Face API token from [https://huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)\n"
         "2. Paste it below.\n"
-        "3. Type your message and press Enter."
+        "3. Type your prompt and press Enter."
     )
     hf_token = st.text_input("Hugging Face API Token:", type="password", key="token_input")
     if st.button("Save Token"):
@@ -38,17 +38,19 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("**How it works:**\n"
-                "This app uses the Hugging Face Inference API with the microsoft/DialoGPT-medium model. "
-                "Your conversation history is formatted and sent as a prompt to the model.")
+                "This app uses the Hugging Face Inference API with the 'gpt2' model. "
+                "Your prompt history is formatted and sent to the model for text generation.")
 
 # Display chat messages from history
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+        # Truncate long messages for display in chat history
+        display_content = (message["content"][:100] + '...') if len(message["content"]) > 100 else message["content"]
+        st.markdown(display_content)
 
 # React to user input
-if prompt := st.chat_input("What would you like to say?"):
-    # Add user message to chat history
+if prompt := st.chat_input("Enter a prompt..."):
+    # Add user message to history
     st.session_state.messages.append({"role": "user", "content": prompt})
     # Display user message
     with st.chat_message("user"):
@@ -60,25 +62,23 @@ if prompt := st.chat_input("What would you like to say?"):
             st.error("Please enter your Hugging Face API token in the sidebar.")
     else:
         # Prepare the prompt for the model
-        # Format conversation history for DialoGPT
-        formatted_prompt = ""
-        for msg in st.session_state.messages:
-            if msg["role"] == "user":
-                formatted_prompt += f"You: {msg['content']}\n"
-            elif msg["role"] == "assistant":
-                formatted_prompt += f"Chatbot: {msg['content']}\n"
-        # Add the prompt for the next assistant response
-        formatted_prompt += "Chatbot:"
+        # Simple concatenation of the last few user messages for context
+        # GPT-2 might not handle complex multi-turn chat as well, so keep it simple
+        recent_history = st.session_state.messages[-4:] # Get last 4 messages for context
+        formatted_prompt = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
+        formatted_prompt += "\nassistant:"
 
-        # Call Hugging Face Inference API - General Endpoint for DialoGPT
-        API_URL = "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium"
+        # Call Hugging Face Inference API - General Endpoint for gpt2
+        API_URL = "https://api-inference.huggingface.co/models/gpt2"
         headers = {"Authorization": f"Bearer {st.session_state.hf_token}"}
         payload = {
             "inputs": formatted_prompt,
             "parameters": {
-                "max_new_tokens": 100,
-                "return_full_text": False, # Important: Only get the new text
-                "temperature": 0.8
+                "max_new_tokens": 80, # Limit response length
+                "return_full_text": False, # Only get the new text
+                "temperature": 0.7, # Add some randomness
+                "top_k": 50, # Limit to top 50 tokens for stability
+                "stop": ["\nuser:", "\nassistant:"] # Try to stop generation at next prompt part
             }
         }
 
@@ -89,7 +89,6 @@ if prompt := st.chat_input("What would you like to say?"):
             # Parse the response
             data = response.json()
             # With return_full_text=False, we expect the new text directly
-            # Sometimes it's a list with one dict, sometimes just the dict
             if isinstance(data, list) and len(data) > 0:
                 bot_response_raw = data[0].get('generated_text', '').strip()
             elif isinstance(data, dict):
@@ -97,11 +96,11 @@ if prompt := st.chat_input("What would you like to say?"):
             else:
                 bot_response_raw = ""
 
-            # Simple cleaning: stop at the next "You:" prompt if generated
-            if "\nYou:" in bot_response_raw:
-                bot_response = bot_response_raw.split("\nYou:")[0].strip()
-            else:
-                bot_response = bot_response_raw
+            # Basic cleaning: stop at specific markers if they appear in the raw response
+            bot_response = bot_response_raw
+            for stop_marker in ["\nuser:", "\nassistant:"]:
+                if stop_marker in bot_response:
+                    bot_response = bot_response.split(stop_marker)[0].strip()
 
             if not bot_response:
                  bot_response = "..." # Fallback if response is empty or parsing failed
@@ -110,7 +109,7 @@ if prompt := st.chat_input("What would you like to say?"):
              if response.status_code == 401:
                  bot_response = "Authentication failed. Please check your Hugging Face API token."
              elif response.status_code == 404:
-                 bot_response = "Model microsoft/DialoGPT-medium not found via this endpoint. Please check the model name or try another."
+                 bot_response = "Model 'gpt2' not found via this endpoint. Please check the model name."
              elif response.status_code == 503:
                  # Common for HF Inference API if model needs to load
                  error_msg = response.json().get('error', 'Model loading or unavailable.')
@@ -122,9 +121,9 @@ if prompt := st.chat_input("What would you like to say?"):
             bot_response = f"Sorry, I encountered a network error contacting the AI service: {e}"
         except (KeyError, IndexError, TypeError) as e:
             # Handle unexpected response format
-            bot_response = f"Sorry, I received an unexpected response from the AI service. It might be busy, unavailable, or the response format changed. Please try again later. (Error details: {e})"
+            bot_response = f"Sorry, I received an unexpected response from the AI service. Please try again later. (Error details: {e})"
 
-        # Add assistant response to chat history
+        # Add assistant response to history
         st.session_state.messages.append({"role": "assistant", "content": bot_response})
         # Display assistant response
         with st.chat_message("assistant"):
