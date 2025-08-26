@@ -22,7 +22,7 @@ with st.sidebar:
         """
         1.  Get your Hugging Face API token from [here](https://huggingface.co/settings/tokens).
         2.  Enter it below.
-        3.  Choose a model to chat with.
+        3.  If the default model fails, try another from the suggestions.
         """
     )
     # Get user's Hugging Face API token
@@ -30,13 +30,19 @@ with st.sidebar:
         "Hugging Face API Token", type="password", help="Your token is not stored."
     )
     
-    # NEW: Allow user to select the model
-    # Changed default to a more reliable, conversational model
+    # FINAL CHANGE: Default model is now 'distilgpt2' for maximum reliability.
     model_name = st.text_input(
         "Hugging Face Model ID",
-        "google/gemma-2b-it",
-        help="e.g., 'distilgpt2' or 'microsoft/DialoGPT-medium'"
+        "distilgpt2",
+        help="This model is small and very likely to be available."
     )
+    
+    # NEW: Added an expander with model suggestions to help the user
+    with st.expander("💡 Model Suggestions"):
+        st.info("Copy-paste one of these if the default model is unavailable:")
+        st.code("distilgpt2")
+        st.code("gpt2")
+        st.code("microsoft/DialoGPT-medium")
 
     st.markdown("---")
     st.info(f"Currently chatting with: **{model_name}**")
@@ -58,16 +64,13 @@ def query_hf_api(prompt, token, model):
     if not token:
         return {"error": "Hugging Face API token is missing. Please enter it in the sidebar."}
 
-    # The API URL is now dynamic based on the selected model
     api_url = f"https://api-inference.huggingface.co/models/{model}"
     headers = {"Authorization": f"Bearer {token}"}
     payload = {
         "inputs": prompt,
         "parameters": {
             "return_full_text": False,
-            "max_new_tokens": 250,
-            "temperature": 0.7,
-            "top_p": 0.9,
+            "max_new_tokens": 150,
         },
         "options": {"wait_for_model": True}
     }
@@ -77,9 +80,8 @@ def query_hf_api(prompt, token, model):
         response.raise_for_status()
         return response.json()
     except requests.exceptions.HTTPError as http_err:
-        # Improved error message for 404
         if response.status_code == 404:
-            return {"error": f"Model '{model}' not found or not available on the free Inference API. Please try another model."}
+            return {"error": f"Model '{model}' not found or not available on the free Inference API. Please try another model from the suggestions in the sidebar."}
         if response.status_code == 401:
             return {"error": "Authentication failed. Please check your API token."}
         if response.status_code == 503:
@@ -97,27 +99,15 @@ if user_prompt := st.chat_input("What is up?"):
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
         message_placeholder.markdown("Thinking...")
-
-        # IMPROVED: Construct a prompt suitable for chat models like Gemma
-        # This helps the model understand the conversation flow
-        prompt_history = ""
-        for msg in st.session_state.messages:
-            if msg["role"] == "user":
-                prompt_history += f"<start_of_turn>user\n{msg['content']}<end_of_turn>\n"
-            else:
-                # We skip adding previous assistant messages to keep the prompt focused
-                # on the user's direct lineage of questions.
-                pass
         
-        # Add the final instruction for the model to generate its response
-        final_prompt = prompt_history + "<start_of_turn>model\n"
+        # We use a simple history concatenation for basic models like distilgpt2
+        prompt_history = "\n".join([msg["content"] for msg in st.session_state.messages])
 
-        # Query the API with the selected model
-        api_response = query_hf_api(final_prompt, hf_api_token, model_name)
+        api_response = query_hf_api(prompt_history, hf_api_token, model_name)
 
         if "error" in api_response:
             bot_response = api_response["error"]
-            st.error(bot_response) # Display error in the chat
+            st.error(bot_response)
         elif isinstance(api_response, list) and api_response and "generated_text" in api_response[0]:
             bot_response = api_response[0]["generated_text"].strip()
         else:
