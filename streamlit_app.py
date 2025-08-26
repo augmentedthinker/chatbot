@@ -1,130 +1,121 @@
-# Hugging Face Chatbot (GPT-2 Fallback)
-# A simple text generation interface using the Hugging Face Inference API.
-# 
-# Instructions:
-# 1. Get your Hugging Face API token from https://huggingface.co/settings/tokens
-# 2. Enter your token in the sidebar.
-# 3. Type your prompt and press Enter or click 'Send'.
-#
-# Notes:
-# - This demo uses the 'gpt2' model via the general inference endpoint.
-# - Responses are generated based on the prompt history.
-# - Conversations are stored in session state and are lost when the app reloads.
+# streamlit_app.py
 
 import streamlit as st
 import requests
+import json
 
-# App title and sidebar setup
-st.title("🤖 Hugging Face Text Gen (GPT-2)")
+# --- Page Configuration ---
+st.set_page_config(
+    page_title="Vibe Coder Chatbot",
+    page_icon="🤖",
+    layout="centered"
+)
 
-# Initialize session state for messages and API token
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "hf_token" not in st.session_state:
-    st.session_state.hf_token = ""
+# --- Application Title and Description ---
+st.title("🤖 Vibe Coder Chatbot")
+st.markdown("A minimal, deployable chatbot using the Hugging Face Inference API. Built for the 'Vibe Coder' workflow.")
 
-# Sidebar for instructions and API token input
+# --- Hugging Face API Configuration ---
+MODEL_NAME = "gpt2"
+API_URL = f"https://api-inference.huggingface.co/models/{MODEL_NAME}"
+
+# --- Sidebar for Instructions and API Token ---
 with st.sidebar:
-    st.header("Setup")
+    st.header("Instructions")
     st.markdown(
-        "1. Get your Hugging Face API token from [https://huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)\n"
-        "2. Paste it below.\n"
-        "3. Type your prompt and press Enter."
+        """
+        1.  Get your Hugging Face API token from [here](https://huggingface.co/settings/tokens).
+        2.  Enter your token below to activate the chatbot.
+        3.  Start chatting! The conversation history is used to provide context.
+        """
     )
-    hf_token = st.text_input("Hugging Face API Token:", type="password", key="token_input")
-    if st.button("Save Token"):
-        st.session_state.hf_token = hf_token
-        st.success("Token saved!")
-
+    # Securely get API token from user
+    hf_api_token = st.text_input("Hugging Face API Token", type="password", help="Your token is not stored.")
     st.markdown("---")
-    st.markdown("**How it works:**\n"
-                "This app uses the Hugging Face Inference API with the 'gpt2' model. "
-                "Your prompt history is formatted and sent to the model for text generation.")
+    st.info("This app uses the `gpt2` model. It's a foundational model, so responses may be simple or repetitive.")
 
-# Display chat messages from history
+# --- Chat History Management ---
+if "messages" not in st.session_state:
+    st.session_state.messages = [{"role": "assistant", "content": "Hello! Please enter your Hugging Face API token to begin."}]
+
+# Display chat messages from history on app rerun
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        # Truncate long messages for display in chat history
-        display_content = (message["content"][:100] + '...') if len(message["content"]) > 100 else message["content"]
-        st.markdown(display_content)
+        st.markdown(message["content"])
 
-# React to user input
-if prompt := st.chat_input("Enter a prompt..."):
-    # Add user message to history
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    # Display user message
-    with st.chat_message("user"):
-        st.markdown(prompt)
+# --- API Query Function ---
+def query_hf_api(prompt, token):
+    """
+    Sends a prompt to the Hugging Face Inference API and returns the response.
+    Handles potential errors gracefully.
+    """
+    if not token:
+        return {"error": "Hugging Face API token is missing. Please enter it in the sidebar."}
 
-    # Check if API token is available
-    if not st.session_state.hf_token:
-        with st.chat_message("assistant"):
-            st.error("Please enter your Hugging Face API token in the sidebar.")
-    else:
-        # Prepare the prompt for the model
-        # Simple concatenation of the last few user messages for context
-        # GPT-2 might not handle complex multi-turn chat as well, so keep it simple
-        recent_history = st.session_state.messages[-4:] # Get last 4 messages for context
-        formatted_prompt = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
-        formatted_prompt += "\nassistant:"
-
-        # Call Hugging Face Inference API - General Endpoint for gpt2
-        API_URL = "https://api-inference.huggingface.co/models/gpt2"
-        headers = {"Authorization": f"Bearer {st.session_state.hf_token}"}
-        payload = {
-            "inputs": formatted_prompt,
-            "parameters": {
-                "max_new_tokens": 80, # Limit response length
-                "return_full_text": False, # Only get the new text
-                "temperature": 0.7, # Add some randomness
-                "top_k": 50, # Limit to top 50 tokens for stability
-                "stop": ["\nuser:", "\nassistant:"] # Try to stop generation at next prompt part
-            }
+    headers = {"Authorization": f"Bearer {token}"}
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "return_full_text": False, # Only return the generated text
+            "max_new_tokens": 150,     # Limit the length of the response
+            "temperature": 0.7,        # Adjust creativity
+            "top_p": 0.9,              # Nucleus sampling
+        },
+        "options": {
+            "wait_for_model": True # Avoid 503 errors if the model is loading
         }
+    }
 
-        try:
-            response = requests.post(API_URL, headers=headers, json=payload)
-            response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
+    try:
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+        response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
+        return response.json()
+    except requests.exceptions.HTTPError as http_err:
+        # Specifically handle common HTTP errors with user-friendly messages
+        if response.status_code == 401:
+            return {"error": "Authentication failed. Please check if your API token is correct."}
+        elif response.status_code == 429:
+            return {"error": "Too many requests. Please wait a bit before trying again."}
+        elif response.status_code == 503:
+             return {"error": "The model is currently loading or unavailable. Please try again in a few moments."}
+        else:
+            return {"error": f"An HTTP error occurred: {http_err}"}
+    except requests.exceptions.RequestException as req_err:
+        return {"error": f"A network error occurred: {req_err}"}
+    except json.JSONDecodeError:
+        return {"error": "Failed to decode the response from the API. The API might be temporarily down."}
 
-            # Parse the response
-            data = response.json()
-            # With return_full_text=False, we expect the new text directly
-            if isinstance(data, list) and len(data) > 0:
-                bot_response_raw = data[0].get('generated_text', '').strip()
-            elif isinstance(data, dict):
-                bot_response_raw = data.get('generated_text', '').strip()
-            else:
-                bot_response_raw = ""
 
-            # Basic cleaning: stop at specific markers if they appear in the raw response
-            bot_response = bot_response_raw
-            for stop_marker in ["\nuser:", "\nassistant:"]:
-                if stop_marker in bot_response:
-                    bot_response = bot_response.split(stop_marker)[0].strip()
+# --- Main Chat Logic ---
+if user_prompt := st.chat_input("What is up?"):
+    # Add user message to chat history
+    st.session_state.messages.append({"role": "user", "content": user_prompt})
+    # Display user message in chat message container
+    with st.chat_message("user"):
+        st.markdown(user_prompt)
 
-            if not bot_response:
-                 bot_response = "..." # Fallback if response is empty or parsing failed
+    # Display assistant response in chat message container
+    with st.chat_message("assistant"):
+        message_placeholder = st.empty()
+        message_placeholder.markdown("Thinking...")
 
-        except requests.exceptions.HTTPError as e:
-             if response.status_code == 401:
-                 bot_response = "Authentication failed. Please check your Hugging Face API token."
-             elif response.status_code == 404:
-                 bot_response = "Model 'gpt2' not found via this endpoint. Please check the model name."
-             elif response.status_code == 503:
-                 # Common for HF Inference API if model needs to load
-                 error_msg = response.json().get('error', 'Model loading or unavailable.')
-                 bot_response = f"Service temporarily unavailable: {error_msg}"
-             else:
-                 bot_response = f"HTTP error occurred: {e}"
-        except requests.exceptions.RequestException as e:
-            # Handle other network errors
-            bot_response = f"Sorry, I encountered a network error contacting the AI service: {e}"
-        except (KeyError, IndexError, TypeError) as e:
-            # Handle unexpected response format
-            bot_response = f"Sorry, I received an unexpected response from the AI service. Please try again later. (Error details: {e})"
+        # Construct a single prompt from the conversation history
+        # Simple approach: join all messages
+        conversation_history = "\n".join([msg["content"] for msg in st.session_state.messages])
+        
+        # Query the API
+        api_response = query_hf_api(conversation_history, hf_api_token)
 
-        # Add assistant response to history
-        st.session_state.messages.append({"role": "assistant", "content": bot_response})
-        # Display assistant response
-        with st.chat_message("assistant"):
-            st.markdown(bot_response)
+        if "error" in api_response:
+            bot_response = api_response["error"]
+            st.error(bot_response) # Show error in the UI
+        elif isinstance(api_response, list) and api_response and "generated_text" in api_response[0]:
+            bot_response = api_response[0]["generated_text"].strip()
+        else:
+            bot_response = "Sorry, I received an unexpected response from the API. Please try again."
+            st.warning(f"Unexpected API response format: {api_response}")
+
+        message_placeholder.markdown(bot_response)
+
+    # Add assistant response to chat history
+    st.session_state.messages.append({"role": "assistant", "content": bot_response})
